@@ -173,7 +173,11 @@ void processCommand(String command) {
 
   if (command == "readcard") {
     String uid = "12abc";
-    makeHttpRequest("rfid/" + uid + "/exists", "GET", "");
+    String response = makeHttpRequest("rfid/" + uid + "/exists", "GET", "");
+    if (response == "true"){
+      String registryResponse = makeHttpRequest("rfid/registry_time/"+uid, "POST", "");
+      Serial.println(registryResponse);
+    }
   } else if (command == "desactivar") {
     Serial.println("Comando recibido: Desactivar RFID");
   } else if (command == "ipaddress") {
