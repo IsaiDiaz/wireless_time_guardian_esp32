@@ -11,18 +11,26 @@
 #define SS_PIN 21
 #define LED_PIN 2
 
+enum HttpRequestStatus {
+  HttpRequestSuccess,
+  HttpRequestFailed,
+  HttpRequestNoData
+};
+
 const int MAX_CHAR = 50;
-volatile bool rfidReaderActive;
+volatile bool rfidReaderActive = false;
 
 /*
 SSID = CAT
 PASSWORD = 0ammj742660a
 SERVERIP = 192.168.1.10
 */
-char ssid[MAX_CHAR] = "CAT";
-char password[MAX_CHAR] = "0ammj742660a";
-char serverIP[MAX_CHAR] = "192.168.1.10";
+String ssid;
+String password;
+String serverIP;
 
+const char *ssidEsp32 = "RFID-Config";
+const char *passwordEsp32 = "rfidconfig";
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 AsyncWebServer server(80);
@@ -31,45 +39,102 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   Serial.begin(115200);
 
-  /*Serial.println("Ingrese el nombre de la red WiFi:");
-  while(Serial.available() == 0){
+  WiFi.softAP(ssidEsp32, passwordEsp32);
+  Serial.println(WiFi.softAPIP());
 
-  }
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String html = "<html><head>"
+                  "<style>"
+                  "  body { font-family: Arial, sans-serif; background-color: #f4f4f4; margin: 20px; }"
+                  "  h1 { color: #333; }"
+                  "  .container { max-width: 600px; margin: auto; background-color: #fff; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }"
+                  "  label { display: block; margin-bottom: 8px; }"
+                  "  input { width: 100%; padding: 8px; margin-bottom: 16px; box-sizing: border-box; }"
+                  "  button { background-color: #007bff; color: #fff; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }"
+                  "</style>"
+                  "</head><body>"
+                  "<div class='container'>"
+                  "<h1>Configuración ESP32</h1>"
+                  "<form>"
+                  "  <label for='ssid'>SSID:</label>"
+                  "  <input type='text' id='ssid'>"
+                  "  <label for='password'>Contraseña:</label>"
+                  "  <input type='password' id='password'>"
+                  "  <label for='serverIP'>Servidor IP:</label>"
+                  "  <input type='text' id='serverIP'>"
+                  "  <button type='button' onclick='guardarConfiguracion()'>Guardar</button>"
+                  "</form>"
+                  "<script>"
+                  "function guardarConfiguracion() {"
+                  "  var ssid = document.getElementById('ssid').value;"
+                  "  var password = document.getElementById('password').value;"
+                  "  var serverIP = document.getElementById('serverIP').value;"
+                  "  window.location = '/config?ssid=' + encodeURIComponent(ssid) + '&password=' + encodeURIComponent(password) + '&serverIP=' + encodeURIComponent(serverIP);"
+                  "}"
+                  "</script>"
+                  "</div>"
+                  "</body></html>";
 
-  delay (199);
-  Serial.readBytesUntil('\n', ssid, MAX_CHAR);
-  Serial.println(ssid);
+    request->send(200, "text/html", html);
+  });
 
-  Serial.println("Ingrese la contraseña de la red WiFi:");
-  while (Serial.available() == 0){
 
-  }
+  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
+    // Lee los parámetros del formulario
+    if (request->hasParam("ssid") && request->hasParam("password") && request->hasParam("serverIP")) {
+      ssid = request->getParam("ssid")->value();
+      password = request->getParam("password")->value();
+      serverIP = request->getParam("serverIP")->value();
 
-  delay(100);
-  Serial.readBytesUntil('\n', password, MAX_CHAR);
-  Serial.println(password);*/
+      request->send(200, "text/html", "Configuracion guardada.");
 
-  connectToWiFi();
+      WiFi.softAPdisconnect(true);
+      connectToWiFi();
 
-  /*Serial.println("Ingrese la direccion IP del servidor");
-  while (Serial.available() == 0){
-  }
-  
-  delay(100);
-  Serial.readBytesUntil('\n', serverIP, MAX_CHAR);
-  Serial.println(serverIP);*/
+      //inicializa rfid status con informacion de base de datos desde el servidor
+      String readerStatus;
+      HttpRequestStatus status = makeHttpRequest("rfid/status", "GET", "", readerStatus);
 
-  String readerStatus = makeHttpRequest("rfid/status", "GET", "");
-  if (readerStatus == "true") {
-    rfidReaderActive = true;
-  } else {
-    rfidReaderActive = false;
-  }
+      if (status == HttpRequestSuccess) {
+        if (readerStatus == "true") {
+          rfidReaderActive = true;
+        } else {
+          rfidReaderActive = false;
+        }
+      }
+    } else {
+      request->send(400, "text/plain", "Parámetros incompletos.");
+    }
+  });
 
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    makeHttpRequest("rfid/status/update", "PUT", "");
-    rfidReaderActive = !rfidReaderActive;
-    request->send(200, "text/plain", String("RFID status actualizado: ") + (rfidReaderActive?"activo":"inactivo"));
+  server.on("/status/refresh", HTTP_GET, [](AsyncWebServerRequest *request){
+    String readerStatus;
+      HttpRequestStatus status = makeHttpRequest("rfid/status", "GET", "", readerStatus);
+
+      if (status == HttpRequestSuccess) {
+        if (readerStatus == "true") {
+          rfidReaderActive = true;
+        } else {
+          rfidReaderActive = false;
+          request->send(500, "text/html", "Error al obtener estado de lector desde base de datos.");
+        }
+      }
+      request->send(200, "text/html", "Estado del lector actulizada con base de datos.");
+  });
+
+  server.on("/status/update", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String response;
+    HttpRequestStatus status = makeHttpRequest("rfid/status/update", "PUT", "", response);
+    if (status == HttpRequestSuccess) {
+      rfidReaderActive = !rfidReaderActive;
+      request->send(200, "text/plain", String("RFID status actualizado: ") + (rfidReaderActive ? "activo" : "inactivo"));
+    } else {
+      request->send(500, "text/plain", String("Ocurrio un erro al intentar actualizar el estado del lector RFID"));
+    }
+  });
+
+  server.onNotFound([](AsyncWebServerRequest *request) {
+    request->redirect("/");
   });
 
   server.begin();
@@ -87,9 +152,7 @@ void loop() {
     processCommand(command);
   }
 
-  /*String data = makeHttpRequest("rfid/status", "");
-
-  if (data == "true") {
+  if (rfidReaderActive == true) {
     if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
       Serial.print("UID de la tarjeta: ");
       digitalWrite(LED_PIN, HIGH);
@@ -101,18 +164,16 @@ void loop() {
 
       mfrc522.PICC_HaltA();
     }
-    Serial.println("RFID lector activo");
-    //delay(5000);
+    delay(1000);
     digitalWrite(LED_PIN, LOW);
-  }else{
-    Serial.println("El lector RFID se encuentra desactivado por el administrador");
-    //delay(10000);
-  }*/
+  } else {
+    delay(1000);
+  }
 }
 
 void connectToWiFi() {
   Serial.println("Conectando a la red WiFi...");
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid.c_str(), password.c_str());
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(100);
@@ -123,21 +184,19 @@ void connectToWiFi() {
   Serial.println("Direccion IP: " + WiFi.localIP().toString());
 }
 
-String makeHttpRequest(String path, String method, String data) {
+HttpRequestStatus makeHttpRequest(String path, String method, String data, String &responseData) {
   HTTPClient http;
   String url = "http://" + String(serverIP) + ":8080" + "/api/v1/" + path;
   http.begin(url);
   int httpCode;
-  if(method == "GET"){
+
+  if (method == "GET") {
     httpCode = http.GET();
-  }else if (method == "POST"){
+  } else if (method == "POST") {
     httpCode = http.POST(data);
-  }else if (method == "PUT"){
+  } else if (method == "PUT") {
     httpCode = http.PUT(data);
   }
-  
-
-  String dataResult;
 
   if (httpCode > 0) {
     // file found at server
@@ -147,24 +206,25 @@ String makeHttpRequest(String path, String method, String data) {
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, payload);
 
-    const char* code = doc["code"];
-    const char* message = doc["message"];
+    const char *code = doc["code"];
+    const char *message = doc["message"];
     Serial.printf("[HTTP] GET... code: %d\n", httpCode);
     Serial.println(String(code) + " - " + String(message));
 
     if (doc.containsKey("data")) {
-      serializeJson(doc["data"], dataResult);
+      serializeJson(doc["data"], responseData);
+      return HttpRequestSuccess;
     } else {
-      dataResult = "nothing";
       Serial.println("No se encontró la propiedad 'data' en la respuesta JSON");
+      return HttpRequestNoData;
     }
 
   } else {
     Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+    return HttpRequestFailed;
   }
 
   http.end();
-  return dataResult;
 }
 
 void processCommand(String command) {
@@ -173,18 +233,24 @@ void processCommand(String command) {
 
   if (command == "readcard") {
     String uid = "12abc";
-    String response = makeHttpRequest("rfid/" + uid + "/exists", "GET", "");
-    if (response == "true"){
-      String registryResponse = makeHttpRequest("rfid/registry_time/"+uid, "POST", "");
-      Serial.println(registryResponse);
+    String response;
+    HttpRequestStatus status = makeHttpRequest("rfid/" + uid + "/exists", "GET", "", response);
+    if (status == HttpRequestSuccess) {
+      if (response == "true") {
+        String registryResponse;
+        HttpRequestStatus registryStatus = makeHttpRequest("rfid/registry_time/" + uid, "POST", "", registryResponse);
+        if (registryStatus == HttpRequestSuccess) {
+          Serial.println(registryResponse);
+        }
+      }
     }
   } else if (command == "desactivar") {
     Serial.println("Comando recibido: Desactivar RFID");
   } else if (command == "ipaddress") {
     Serial.println("IP: " + WiFi.localIP().toString());
-  } else if (command == "rfidstatus"){
-    Serial.println(String("Estado del lector RFID: ") + (rfidReaderActive?"activo":"inactivo"));
-  }else {
+  } else if (command == "rfidstatus") {
+    Serial.println(String("Estado del lector RFID: ") + (rfidReaderActive ? "activo" : "inactivo"));
+  } else {
     Serial.println("Comando no reconocido");
   }
 }
