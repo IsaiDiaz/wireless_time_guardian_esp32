@@ -42,6 +42,7 @@ void setup() {
   WiFi.softAP(ssidEsp32, passwordEsp32);
   Serial.println(WiFi.softAPIP());
 
+  //Muestra la pagina web para enviar datos en la direccion por defecto
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     String html = "<html><head>"
                   "<style>"
@@ -78,7 +79,7 @@ void setup() {
     request->send(200, "text/html", html);
   });
 
-
+  //recibe las configuraciones
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
     // Lee los parámetros del formulario
     if (request->hasParam("ssid") && request->hasParam("password") && request->hasParam("serverIP")) {
@@ -87,8 +88,12 @@ void setup() {
       serverIP = request->getParam("serverIP")->value();
 
       request->send(200, "text/html", "Configuracion guardada.");
+
+      //desconecta el wifi de esp32
       WiFi.softAPdisconnect(true);
+    
       connectToWiFi();
+
       //inicializa rfid status con informacion de base de datos desde el servidor
       String readerStatus;
       HttpRequestStatus status = makeHttpRequest("rfid/status", "GET", "", readerStatus);
@@ -107,6 +112,7 @@ void setup() {
     }
   });
 
+  //obtiene el estado del lector de base de datos
   server.on("/status/refresh", HTTP_GET, [](AsyncWebServerRequest *request) {
     String readerStatus;
     HttpRequestStatus status = makeHttpRequest("rfid/status", "GET", "", readerStatus);
@@ -122,6 +128,7 @@ void setup() {
     request->send(200, "text/html", "Estado del lector actulizada con base de datos.");
   });
 
+  //actualiza el estado del lector en el servidor
   server.on("/status/update", HTTP_GET, [](AsyncWebServerRequest *request) {
     String response;
     HttpRequestStatus status = makeHttpRequest("rfid/status/update", "PUT", "", response);
@@ -146,7 +153,6 @@ void setup() {
 }
 
 void loop() {
-
   if (Serial.available() > 0) {
     String command = Serial.readStringUntil('\n');
     processCommand(command);
@@ -176,7 +182,7 @@ void readCard() {
 void processUid(String uid) {
   String response;
   HttpRequestStatus status = makeHttpRequest("rfid/" + uid + "/exists", "GET", "", response);
-  if (status == HttpRequestSuccess && rfidReaderActive) {
+  if (status == HttpRequestSuccess && rfidReaderActive && response == "true") {
     registryTime(uid);
   } else {
     registryCardUid(uid);
@@ -254,6 +260,9 @@ HttpRequestStatus makeHttpRequest(String path, String method, String data, Strin
       Serial.println(String(code) + " - " + String(message));
 
       if (doc.containsKey("data")) {
+        if(httpCode != 200){
+          return HttpRequestFailed;
+        }
         serializeJson(doc["data"], responseData);
         Serial.println(responseData);
         http.end();
